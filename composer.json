@@ -1,0 +1,24 @@
+{
+  "name": "tinvar/billing",
+  "description": "Tinvar's billing, for the applications that opt into it: plans declared as an enum, Stripe Checkout and the Customer Portal, subscriptions kept locally from verified webhooks, seats, and #[RequiresPlan] and #[RequiresFeature] gates that fail closed.",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.5",
+    "nesbot/carbon": "^3.15.1",
+    "tinvar/database": "0.4.*",
+    "tinvar/framework": "0.4.*",
+    "tinvar/support": "0.4.*"
+  },
+  "require-dev": {
+    "pestphp/pest": "^4.0",
+    "tinvar/testing": "0.4.*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Tinvar\\Billing\\": "src/Billing/"
+    }
+  },
+  "config": { "sort-packages": true },
+  "minimum-stability": "stable"
+}
