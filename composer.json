@@ -11,7 +11,7 @@
     "tinvar/support": "0.4.*"
   },
   "require-dev": {
-    "pestphp/pest": "^4.0",
+    "pestphp/pest": "^5.3",
     "tinvar/testing": "0.4.*"
   },
   "autoload": {
