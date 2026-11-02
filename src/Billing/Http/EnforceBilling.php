@@ -18,9 +18,11 @@ use Tinvar\Http\Response;
  * entitled now to a plan named or a feature named, or the request is
  * refused before the entry point runs (ADR 0150).
  *
- * It runs where the entry point's own middleware runs: after the tenant is
- * placed and the panel's stack -- its guard, its membership check -- has
- * run, so the payer is the request's tenant or its signed-in user.
+ * It runs after the entry point's #[Authorize] checks have passed
+ * (EntryGates): after the tenant is placed and the panel's stack -- its
+ * guard, its membership check -- has run, so the payer is the request's
+ * tenant or its signed-in user, and a caller the checks refuse never
+ * learns whether the payer is entitled.
  */
 final readonly class EnforceBilling implements AttributeMiddleware
 {
