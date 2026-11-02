@@ -345,10 +345,14 @@ final class Billing
         }
 
         // The same key for every first try for this payer, so two checkouts
-        // started at once make one customer.
+        // started at once make one customer -- in this environment alone.
+        // Two on one Stripe account -- staging and production, or two
+        // developers' -- each bill their own tenant acme, and a key that
+        // was the payer's alone handed the second the first's customer,
+        // whose subscriptions the first then heard of (StripeClient::scope()).
         $customer = $this->stripe->post('/v1/customers', [
             'metadata' => ['tinvar_billable' => $billable->key()],
-        ], 'tinvar-customer-' . hash('sha256', $billable->key()));
+        ], 'tinvar-customer-' . $this->stripe->scope() . '-' . hash('sha256', $billable->key()));
         $id = $customer['id'] ?? null;
         if (!\is_string($id) || preg_match('/^cus_[A-Za-z0-9]{6,250}\z/', $id) !== 1) {
             throw new StripeException('Stripe answered the new customer with no cus_ id.');

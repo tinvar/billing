@@ -73,6 +73,27 @@ final readonly class StripeClient
         return $this->secretKey !== null && str_contains($this->secretKey->reveal(), '_live_');
     }
 
+    /**
+     * What sets this application's environment apart from another on the
+     * same Stripe account, for an Idempotency-Key that must be its own:
+     * the mode, `test` or `live`, then a digest of the secret key and the
+     * webhook signing secret -- each environment that hears Stripe has an
+     * endpoint, and so a signing secret, of its own. A digest under a
+     * label of its own, never either secret; `none` with no key set.
+     */
+    public function scope(): string
+    {
+        if ($this->secretKey === null) {
+            return 'none';
+        }
+
+        return ($this->live() ? 'live' : 'test') . '-' . substr(hash_hmac(
+            'sha256',
+            $this->secretKey->reveal() . "\0" . ($this->webhookSecret?->reveal() ?? ''),
+            'tinvar-stripe-idempotency-scope',
+        ), 0, 32);
+    }
+
     /** The webhook signing secret, for StripeSignature alone; null when none is set. */
     public function webhookSecret(): ?Secret
     {

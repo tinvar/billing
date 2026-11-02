@@ -13,6 +13,9 @@ namespace Tinvar\Tests\Billing\Checkout;
 
 use Tinvar\Billing\Billable;
 use Tinvar\Billing\BillableKind;
+use Tinvar\Billing\Billables;
+use Tinvar\Billing\Billing;
+use Tinvar\Billing\ArraySubscriptions;
 use Tinvar\Billing\Fakes\FakeStripe;
 use Tinvar\Billing\Interval;
 use Tinvar\Billing\Stripe\StripeClient;
@@ -63,6 +66,45 @@ it('makes one Stripe customer per payer, and another for another tenant', functi
 
     expect($app->stripe->customers)->toHaveCount(2)
         ->and(array_column(array_column($app->stripe->customers, 'metadata'), 'tinvar_billable'))->toBe(['tenant:acme', 'tenant:globex']);
+});
+
+// Two environments -- staging and production, or two developers' -- on one
+// Stripe account each bill a tenant called acme. Had the customer's
+// Idempotency-Key been the payer's alone, the second would have been handed
+// the first's customer, and its subscriptions heard by the first.
+it('makes each environment on one Stripe account a customer of its own, never another\'s', function () {
+    $stripe = new FakeStripe(\Tinvar\Tests\Billing\Fixtures\PRICES);
+    $acme = new class implements Billables {
+        public function kind(): BillableKind
+        {
+            return BillableKind::Tenant;
+        }
+
+        public function current(): ?Billable
+        {
+            return new Billable(BillableKind::Tenant, 'acme');
+        }
+    };
+    $environment = static function (string $key, string $webhookSecret) use ($stripe, $acme): Billing {
+        return new Billing(Plan::class, $acme, new ArraySubscriptions(), new StripeClient(new Secret($key), $stripe->http, new Secret($webhookSecret)));
+    };
+    $checkout = static fn (Billing $billing): string => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back');
+
+    $checkout($environment(FakeStripe::SECRET_KEY, FakeStripe::WEBHOOK_SECRET));
+    $checkout($environment(FakeStripe::SECRET_KEY, 'whsec_StagingEndpointSecret0123456789'));
+    $checkout($environment(FakeStripe::SECRET_KEY, 'whsec_PreviewEndpointSecret01234567890'));
+    $checkout($environment(FakeStripe::SECRET_KEY, FakeStripe::WEBHOOK_SECRET));
+
+    $keys = array_values(array_map(
+        static fn (OutboundRequest $r): string => $r->headers['idempotency-key'] ?? '',
+        array_filter($stripe->http->sent, static fn (OutboundRequest $r): bool => str_ends_with($r->url, '/v1/customers')),
+    ));
+    expect($stripe->customers)->toHaveCount(3)
+        ->and(array_unique(\array_slice($keys, 0, 3)))->toHaveCount(3)
+        // The same environment again asks with the key it asked with.
+        ->and($keys[3])->toBe($keys[0])
+        ->and($keys[0])->toStartWith('tinvar-customer-test-')
+        ->and($keys[0])->not->toContain('acme');
 });
 
 it('sends every call to api.stripe.com alone, with the key in the Authorization header, the API version pinned, and a POST idempotent', function () {
