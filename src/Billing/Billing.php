@@ -7,7 +7,9 @@ namespace Tinvar\Billing;
 use Carbon\CarbonImmutable;
 use Tinvar\Billing\Stripe\StripeClient;
 use Tinvar\Billing\Stripe\StripeException;
+use Tinvar\Http\HostName;
 use Tinvar\Http\HttpException;
+use Tinvar\Routing\Domains;
 
 /**
  * Billing, as an application registers it with its container (ADR 0150):
@@ -19,6 +21,7 @@ use Tinvar\Http\HttpException;
  *         new TenantBillables($orm),              // or new UserBillables($auth)
  *         new DatabaseSubscriptions($connection),
  *         BillingSetup::stripe($outbound),        // the keys, from TINVAR_STRIPE_*
+ *         hosts: $domains,                        // where Stripe may send a browser back to
  *     ));
  *
  * What a payer's plan is comes from the subscriptions kept, which only
@@ -46,6 +49,9 @@ final class Billing
      *        for -- after a failed payment, or a period's end whose renewal was not heard of; 3 days unless given
      * @param Plan|null $freePlan the plan of a payer with no subscription that entitles; none unless given
      * @param (\Closure(): CarbonImmutable)|null $clock now, in UTC
+     * @param Domains|list<string>|null $hosts the application's own hosts, the only ones Stripe may send a
+     *        browser back to: its Domains -- any host it serves, in its scheme and port, an alias never --
+     *        or the host names themselves. None, and Checkout and the portal are refused
      */
     public function __construct(
         string|Plans $plans,
@@ -55,13 +61,29 @@ final class Billing
         ?\DateInterval $grace = null,
         public readonly ?Plan $freePlan = null,
         private readonly ?\Closure $clock = null,
+        Domains|array|null $hosts = null,
     ) {
         $this->plans = $plans instanceof Plans ? $plans : new Plans($plans);
         $this->grace = $grace ?? new \DateInterval('P3D');
         if ($freePlan !== null && !$freePlan instanceof $this->plans->enum) {
             throw new \InvalidArgumentException('The free plan is one of ' . $this->plans->enum . '\'s cases.');
         }
+        if (\is_array($hosts)) {
+            $names = [];
+            foreach ($hosts as $host) {
+                $name = HostName::normalize($host);
+                if ($name === null || $name !== strtolower(rtrim($host, '.'))) {
+                    throw new \InvalidArgumentException('Billing\'s hosts are host names, with no scheme, port or path: ' . var_export($host, true) . ' is not one.');
+                }
+                $names[] = $name;
+            }
+            $hosts = $names;
+        }
+        $this->hosts = $hosts;
     }
+
+    /** @var Domains|list<string>|null */
+    private readonly Domains|array|null $hosts;
 
     public function stripe(): StripeClient
     {
@@ -165,6 +187,8 @@ final class Billing
     public function checkout(Plan $plan, Interval $interval, string $successUrl, string $cancelUrl, int $seats = 1): string
     {
         $billable = $this->requirePayer();
+        $this->ownUrl($successUrl, 'success');
+        $this->ownUrl($cancelUrl, 'cancel');
         if (!$plan instanceof $this->plans->enum) {
             throw new \InvalidArgumentException($plan::class . "::{$plan->name} is not one of " . $this->plans->enum . '\'s plans.');
         }
@@ -192,8 +216,8 @@ final class Billing
             'customer' => $this->customerFor($billable),
             'client_reference_id' => self::reference($billable),
             'line_items' => [['price' => $this->priceId($lookupKey), 'quantity' => $seats]],
-            'success_url' => self::ownUrl($successUrl, 'success'),
-            'cancel_url' => self::ownUrl($cancelUrl, 'cancel'),
+            'success_url' => $successUrl,
+            'cancel_url' => $cancelUrl,
             'subscription_data' => [
                 'metadata' => ['tinvar_billable' => $billable->key()],
                 // A trial is the payer's first subscription's alone: offered
@@ -217,6 +241,7 @@ final class Billing
     public function portal(string $returnUrl): string
     {
         $billable = $this->requirePayer();
+        $this->ownUrl($returnUrl, 'return');
         $customer = $this->store->customerOf($billable) ?? throw new HttpException(
             409,
             'There is no billing account to manage yet: subscribe to a plan first.',
@@ -224,7 +249,7 @@ final class Billing
         );
         $session = $this->stripe->post('/v1/billing_portal/sessions', [
             'customer' => $customer,
-            'return_url' => self::ownUrl($returnUrl, 'return'),
+            'return_url' => $returnUrl,
         ], 'tinvar-portal-' . bin2hex(random_bytes(16)));
 
         return self::hosted($session, 'https://billing.stripe.com', 'the Customer Portal');
@@ -435,16 +460,37 @@ final class Billing
         return $url;
     }
 
-    /** An absolute http(s) URL with a host, as Stripe needs a return URL. */
-    private static function ownUrl(string $url, string $what): string
+    /**
+     * Holds a URL Stripe sends a browser back to to the application's own
+     * hosts: an absolute http(s) URL, with no userinfo and nothing a browser
+     * would read another way, on a host Billing was given. Any other host
+     * would make Stripe's page a redirect to anywhere.
+     *
+     * @throws \LogicException when Billing was given no hosts: it fails closed
+     */
+    private function ownUrl(string $url, string $what): void
     {
-        $parts = parse_url($url);
-        if ($parts === false || !\in_array($parts['scheme'] ?? '', ['http', 'https'], true) || ($parts['host'] ?? '') === ''
-            || isset($parts['user']) || isset($parts['pass'])) {
+        if ($this->hosts === null || $this->hosts === []) {
+            throw new \LogicException(
+                'Billing was given no hosts of its own, so it sends no browser to Stripe: Stripe sends it back to the URL it is handed, '
+                . 'which must be this application\'s. Construct Billing with hosts: -- the Domains the Kernel serves, or the host names.',
+            );
+        }
+        if (preg_match('/[\x00-\x20\x7f\\\\]/', $url) === 1
+            || preg_match('#^(https?)://([^/?\#@:]+)(?::([0-9]{1,5}))?(?:[/?\#].*)?\z#is', $url, $m) !== 1) {
             throw new \InvalidArgumentException("The {$what} URL '{$url}' is not an absolute http or https URL: build it from your own origin, as Urls does.");
         }
+        $scheme = strtolower($m[1]);
+        $host = HostName::normalize($m[2]);
+        $port = ($m[3] ?? '') === '' ? null : (int) $m[3];
 
-        return $url;
+        $own = $host !== null && ($this->hosts instanceof Domains
+            ? !\in_array($host, $this->hosts->aliases, true)
+                && $this->hosts->originOfHost($host) === $scheme . '://' . $host . ($port === null || $port === ($scheme === 'https' ? 443 : 80) ? '' : ":{$port}")
+            : \in_array($host, $this->hosts, true));
+        if (!$own) {
+            throw new \InvalidArgumentException("The {$what} URL '{$url}' names a host that is not one of this application's hosts, so Stripe is not sent a browser to come back to it: build it from your own origin, as Urls does.");
+        }
     }
 
     private static function assertSeats(int $seats): void

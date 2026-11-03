@@ -125,7 +125,7 @@ describe('billed by user', function () {
     it('lets in the user who subscribed, and no other', function () {
         $app = new App(byUser: true);
         $app->auth->actingAs(new \Tinvar\Tests\Billing\Fixtures\Member('u-1'), function () use ($app): void {
-            $app->billing->checkout(Plan::Pro, \Tinvar\Billing\Interval::Month, 'https://x.test/ok', 'https://x.test/back');
+            $app->billing->checkout(Plan::Pro, \Tinvar\Billing\Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back');
         });
         $app->stripe->completeCheckout($app->stripe->lastSession());
         $app->deliver($app->stripe->event('checkout.session.completed', $app->stripe->sessions[array_key_last($app->stripe->sessions)]));

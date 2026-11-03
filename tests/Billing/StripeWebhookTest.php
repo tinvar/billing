@@ -37,7 +37,7 @@ beforeEach(function () {
 
 it('keeps the subscription Stripe holds once a signed event names it', function () {
     $app = new App();
-    $app->orm->actAs('acme', fn (): string => $app->billing->checkout(Plan::Team, \Tinvar\Billing\Interval::Month, 'https://x.test/ok', 'https://x.test/back'));
+    $app->orm->actAs('acme', fn (): string => $app->billing->checkout(Plan::Team, \Tinvar\Billing\Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back'));
     $subscription = $app->stripe->completeCheckout($app->stripe->lastSession());
 
     $response = $app->deliver($app->stripe->event('customer.subscription.created', $subscription));
@@ -53,7 +53,7 @@ it('keeps the subscription Stripe holds once a signed event names it', function 
 
 it('refuses a delivery whose signature does not verify, and keeps nothing', function (\Closure $tamper) {
     $app = new App();
-    $app->orm->actAs('acme', fn (): string => $app->billing->checkout(Plan::Team, \Tinvar\Billing\Interval::Month, 'https://x.test/ok', 'https://x.test/back'));
+    $app->orm->actAs('acme', fn (): string => $app->billing->checkout(Plan::Team, \Tinvar\Billing\Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back'));
     $subscription = $app->stripe->completeCheckout($app->stripe->lastSession());
     [$request, $body] = $app->stripe->delivery($app->stripe->event('customer.subscription.created', $subscription));
     [$request, $body] = $tamper($request, $body);
@@ -206,7 +206,7 @@ it('answers 500 and releases the nonce when Stripe cannot be asked, so Stripe\'s
 
 it('is not set up without a webhook secret: every delivery is a 404', function () {
     $app = new App(stripe: new FakeStripe(\Tinvar\Tests\Billing\Fixtures\PRICES));
-    $billing = new \Tinvar\Billing\Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), $app->store, new \Tinvar\Billing\Stripe\StripeClient(new \Tinvar\Config\Secret(FakeStripe::SECRET_KEY), $app->stripe->http));
+    $billing = new \Tinvar\Billing\Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), $app->store, new \Tinvar\Billing\Stripe\StripeClient(new \Tinvar\Config\Secret(FakeStripe::SECRET_KEY), $app->stripe->http), hosts: \Tinvar\Tests\Billing\Fixtures\HOSTS);
     $verifier = new \Tinvar\Billing\Http\StripeSignature($billing);
     [$request, $body] = $app->stripe->delivery($app->stripe->event('customer.created', ['object' => 'customer']));
 

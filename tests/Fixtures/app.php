@@ -98,6 +98,9 @@ enum Plan: string implements BillingPlan
     }
 }
 
+/** The hosts the application serves, which Stripe may send a browser back to. */
+const HOSTS = ['acme.app.test', 'globex.app.test'];
+
 const PRICES = ['pro_monthly' => 'price_ProMonthly01', 'pro_yearly' => 'price_ProYearly001', 'team_monthly' => 'price_TeamMonthly1', 'old_plan' => 'price_OldPlan00001'];
 
 /** acme.app.test is acme's, globex.app.test globex's. */
@@ -289,7 +292,7 @@ final class App
 
     public static function billing(Billables $billables, SubscriptionStore $store, FakeStripe $stripe): Billing
     {
-        return new Billing(Plan::class, $billables, $store, $stripe->client(), freePlan: Plan::Free, clock: Clock::now(...));
+        return new Billing(Plan::class, $billables, $store, $stripe->client(), freePlan: Plan::Free, clock: Clock::now(...), hosts: HOSTS);
     }
 
     public function visit(string $path, string $host = 'acme.app.test', ?string $user = null): Response
@@ -326,7 +329,7 @@ final class App
     /** Has $tenant subscribe through Checkout, and Stripe tell the app: the subscription Stripe holds. */
     public function subscribe(string $tenant, Plan $plan = Plan::Pro, string $host = ''): string
     {
-        $this->orm->actAs($tenant, fn (): string => $this->billing->checkout($plan, Interval::Month, 'https://x.test/ok', 'https://x.test/back'));
+        $this->orm->actAs($tenant, fn (): string => $this->billing->checkout($plan, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back'));
         $subscription = $this->stripe->completeCheckout($this->stripe->lastSession());
         $this->deliver($this->stripe->event('checkout.session.completed', $this->stripe->sessions[array_key_last($this->stripe->sessions)]));
 

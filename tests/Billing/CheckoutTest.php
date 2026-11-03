@@ -125,7 +125,7 @@ it('makes each environment on one Stripe account a customer of its own, never an
         }
     };
     $environment = static function (string $key, string $webhookSecret) use ($stripe, $acme): Billing {
-        return new Billing(Plan::class, $acme, new ArraySubscriptions(), new StripeClient(new Secret($key), $stripe->http, new Secret($webhookSecret)));
+        return new Billing(Plan::class, $acme, new ArraySubscriptions(), new StripeClient(new Secret($key), $stripe->http, new Secret($webhookSecret)), hosts: \Tinvar\Tests\Billing\Fixtures\HOSTS);
     };
     $checkout = static fn (Billing $billing): string => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back');
 
@@ -177,28 +177,76 @@ it('asks Stripe for a lookup key\'s price once a worker', function () {
 it('refuses a plan not sold at that interval, saying which intervals are', function () {
     $app = new App();
 
-    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Team, Interval::Year, 'https://x.test/ok', 'https://x.test/back')))
+    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Team, Interval::Year, 'https://acme.app.test/ok', 'https://acme.app.test/back')))
         ->toThrow(fn (HttpException $e) => expect([$e->status, $e->code_])->toBe([422, 'plan_not_sold']));
 });
 
 it('refuses a lookup key Stripe has no active price for, saying where to set one', function () {
     $app = new App(stripe: new FakeStripe([]));
 
-    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://x.test/ok', 'https://x.test/back')))
+    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back')))
         ->toThrow(StripeException::class, "no active price with the lookup key 'pro_monthly'");
 });
 
 it('refuses a return URL that is not absolute', function () {
     $app = new App();
 
-    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, '/ok', 'https://x.test/back')))
+    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, '/ok', 'https://acme.app.test/back')))
         ->toThrow(\InvalidArgumentException::class, 'not an absolute http or https URL');
+});
+
+// Stripe sends the browser to the return URL with the session done: one on
+// a host that is not the application's makes Stripe's page a redirect to
+// anywhere.
+it('refuses a Checkout or portal return URL on a host that is not the application\'s', function (string $url) {
+    $app = new App();
+    $app->subscribe('acme');
+    $sent = \count($app->stripe->http->sent);
+
+    expect(fn () => $app->orm->actAs('globex', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, $url, 'https://globex.app.test/back')))
+        ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts')
+        ->and(fn () => $app->orm->actAs('globex', fn () => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://globex.app.test/ok', $url)))
+        ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts')
+        ->and(fn () => $app->orm->actAs('acme', fn () => $app->billing->portal($url)))
+        ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts')
+        ->and(\array_slice($app->stripe->http->sent, $sent))->toBe([]);
+})->with([
+    'another host' => ['https://evil.test/ok'],
+    'a host that ends in one of the app\'s' => ['https://evil-acme.app.test.evil.test/ok'],
+    'an address' => ['https://127.0.0.1/ok'],
+]);
+
+it('takes a return URL on any of the hosts it was given, and on a host Domains serves', function () {
+    $app = new App();
+
+    expect($app->orm->actAs('globex', fn (): string => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://GLOBEX.app.test./ok', 'https://acme.app.test/back')))
+        ->toStartWith('https://checkout.stripe.com/');
+
+    $domains = new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}']);
+    $billing = new Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), new ArraySubscriptions(), $app->stripe->client(), hosts: $domains);
+
+    expect($app->orm->actAs('acme', fn (): string => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.example/ok', 'https://app.example/back')))
+        ->toStartWith('https://checkout.stripe.com/')
+        ->and(fn () => $app->orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://app.example/back')))
+        ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts')
+        // Its scheme and port, as Domains writes its own URLs.
+        ->and(fn () => $app->orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'http://app.example/ok', 'https://app.example/back')))
+        ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts');
+});
+
+it('fails closed when Billing was given no hosts of its own: Checkout and the portal are refused, Stripe never asked', function () {
+    $app = new App();
+    $billing = new Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), new ArraySubscriptions(), $app->stripe->client());
+
+    expect(fn () => $app->orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back')))
+        ->toThrow(\LogicException::class, 'hosts:')
+        ->and($app->stripe->http->sent)->toBe([]);
 });
 
 it('refuses Checkout with no tenant in force', function () {
     $app = new App();
 
-    expect(fn () => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://x.test/ok', 'https://x.test/back'))
+    expect(fn () => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back'))
         ->toThrow(fn (HttpException $e) => expect([$e->status, $e->code_])->toBe([403, 'no_tenant']));
 });
 
@@ -237,9 +285,9 @@ it('refuses a hosted page Stripe answers on another origin, rather than sending 
         str_contains($r->url, '/v1/prices') => ['data' => [['id' => 'price_1', 'lookup_key' => 'pro_monthly']]],
         default => ['id' => 'cs_1', 'url' => 'https://checkout.stripe.com.evil.test/pay'],
     }, JSON_THROW_ON_ERROR)));
-    $billing = new \Tinvar\Billing\Billing(Plan::class, new \Tinvar\Billing\TenantBillables($orm = new App()->orm), new \Tinvar\Billing\ArraySubscriptions(), new StripeClient(new Secret(FakeStripe::SECRET_KEY), $http));
+    $billing = new \Tinvar\Billing\Billing(Plan::class, new \Tinvar\Billing\TenantBillables($orm = new App()->orm), new \Tinvar\Billing\ArraySubscriptions(), new StripeClient(new Secret(FakeStripe::SECRET_KEY), $http), hosts: \Tinvar\Tests\Billing\Fixtures\HOSTS);
 
-    expect(fn () => $orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'https://x.test/ok', 'https://x.test/back')))
+    expect(fn () => $orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back')))
         ->toThrow(StripeException::class, 'no URL on https://checkout.stripe.com');
 });
 
