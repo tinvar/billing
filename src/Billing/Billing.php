@@ -145,9 +145,11 @@ final class Billing
      * `ActionResult::location()`, whose allowlist holds
      * StripeClient::REDIRECT_ORIGINS.
      *
-     * The Stripe customer is made once per payer and kept; the session names
-     * the payer in its client_reference_id and the subscription's metadata,
-     * for a person reading Stripe's dashboard. What the subscription is, is
+     * The plan's trial is offered only to a payer with no subscription kept,
+     * of any status: a payer's first. The Stripe customer is made once per
+     * payer and kept; the session names the payer in its
+     * client_reference_id and the subscription's metadata, for a person
+     * reading Stripe's dashboard. What the subscription is, is
      * learnt from Stripe when its webhook arrives.
      *
      * @param string $successUrl where Stripe sends them once they have paid: absolute, this application's
@@ -178,7 +180,10 @@ final class Billing
             'cancel_url' => self::ownUrl($cancelUrl, 'cancel'),
             'subscription_data' => [
                 'metadata' => ['tinvar_billable' => $billable->key()],
-                'trial_period_days' => $plan->trialDays() > 0 ? $plan->trialDays() : null,
+                // A trial is the payer's first subscription's alone: offered
+                // again, a payer could cancel each before it ended and
+                // subscribe anew, on the plan for ever and never charged.
+                'trial_period_days' => $plan->trialDays() > 0 && $this->store->subscriptionsOf($billable, $this->plans) === [] ? $plan->trialDays() : null,
             ],
         ], 'tinvar-checkout-' . bin2hex(random_bytes(16)));
 

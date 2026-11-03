@@ -58,6 +58,24 @@ it('starts Checkout for the tenant in force and sends the browser to Stripe from
         ->and($session['_form']['mode'])->toBe('subscription');
 });
 
+// A trial is a payer's first subscription's. Offered on every Checkout, a
+// payer could subscribe, cancel before the trial ended, and subscribe
+// again: the plan, for ever, never charged.
+it('offers the trial to a payer who never subscribed, and to no one again', function () {
+    $app = new App();
+    $id = $app->subscribe('acme', Plan::Pro);
+    $app->stripe->change($id, ['status' => 'canceled', 'ended_at' => Clock::$now]);
+    $app->deliver($app->stripe->event('customer.subscription.deleted', $app->stripe->subscriptions[$id]));
+
+    $app->act('billing.checkout', ['plan' => 'pro']);
+    $again = $app->stripe->lastSession();
+    $app->act('billing.checkout', ['plan' => 'pro'], host: 'globex.app.test');
+    $first = $app->stripe->lastSession();
+
+    expect($again['_form']['subscription_data'])->toBe(['metadata' => ['tinvar_billable' => 'tenant:acme']])
+        ->and($first['_form']['subscription_data']['trial_period_days'] ?? null)->toBe('14');
+});
+
 it('makes one Stripe customer per payer, and another for another tenant', function () {
     $app = new App();
     $app->act('billing.checkout');
