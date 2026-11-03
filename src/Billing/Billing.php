@@ -334,7 +334,7 @@ final class Billing
      *
      * @param array<string, mixed> $object
      */
-    private function keep(array $object, CarbonImmutable $syncedAt, string $asked): ?Subscription
+    private function keep(array $object, CarbonImmutable $syncedAt, string $asked, bool $trialEnded = false): ?Subscription
     {
         if (($object['object'] ?? null) !== 'subscription' || ($object['id'] ?? null) !== $asked) {
             throw new StripeException("Stripe answered for subscription {$asked} with something else.");
@@ -354,6 +354,22 @@ final class Billing
         $lookupKey = \is_string($price['lookup_key'] ?? null) ? $price['lookup_key'] : null;
         $status = SubscriptionStatus::tryFrom(\is_string($object['status'] ?? null) ? $object['status'] : '')
             ?? throw new StripeException("Stripe answered subscription {$asked} with a status billing does not know.");
+
+        // A trial is the payer's first subscription's, recorded by the one
+        // write that only an empty record takes. Any other that is trialing
+        // -- two Checkouts started at once, each offered one before either
+        // was kept, or a subscription made in Stripe's dashboard -- has its
+        // trial ended at Stripe, and Stripe's answer is what is kept.
+        $first = $this->store->firstSubscription($billable, $asked);
+        if ($status === SubscriptionStatus::Trialing && $first !== $asked) {
+            if ($trialEnded) {
+                throw new StripeException("Stripe answered subscription {$asked} still trialing once its trial was ended.");
+            }
+            $syncedAt = $this->now();
+            $ended = $this->stripe->post("/v1/subscriptions/{$asked}", ['trial_end' => 'now', 'proration_behavior' => 'none'], 'tinvar-trial-end-' . $asked);
+
+            return $this->keep($ended, $syncedAt, $asked, trialEnded: true);
+        }
 
         $previous = $this->store->find($asked, $this->plans);
         $pastDueSince = !$status->isPastDue() ? null

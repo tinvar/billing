@@ -266,6 +266,15 @@ final class FakeStripe
                 if ($quantity !== null) {
                     $this->change($m[1], ['item' => ['quantity' => (int) $quantity]]);
                 }
+                // Ends the trial now, as Stripe does: the subscription is
+                // active, its first paid period starting now.
+                if (($form['trial_end'] ?? null) === 'now' && ($this->subscriptions[$m[1]]['status'] ?? null) === 'trialing') {
+                    $this->change($m[1], [
+                        'status' => 'active',
+                        'trial_end' => $this->now,
+                        'item' => ['current_period_start' => $this->now, 'current_period_end' => $this->now + 30 * 86_400],
+                    ]);
+                }
             }
 
             return self::json($this->subscriptions[$m[1]]);

@@ -118,6 +118,23 @@ it('reads a payer\'s own subscriptions alone, as they were kept', function (stri
     });
 })->with($stores);
 
+// The trial is the first subscription's: claimed by one statement, so of
+// two webhooks at once one wins, and for ever after.
+it('records a payer\'s first subscription once, and answers it to every later claim', function (string $store) {
+    eachStore($store, function (SubscriptionStore $s): void {
+        $acme = new Billable(BillableKind::Tenant, 'acme');
+        $globex = new Billable(BillableKind::Tenant, 'globex');
+        $s->keepCustomer($acme, 'cus_acme');
+        $s->keepCustomer($globex, 'cus_globex');
+
+        expect($s->firstSubscription($acme, 'sub_acme01'))->toBe('sub_acme01')
+            ->and($s->firstSubscription($acme, 'sub_acme02'))->toBe('sub_acme01')
+            ->and($s->firstSubscription($acme, 'sub_acme01'))->toBe('sub_acme01')
+            ->and($s->firstSubscription($globex, 'sub_globex2'))->toBe('sub_globex2')
+            ->and($s->firstSubscription($acme, 'sub_acme03'))->toBe('sub_acme01');
+    });
+})->with($stores);
+
 it('never lets an older answer replace a newer one, and lets a newer one replace an older', function (string $store) {
     eachStore($store, function (SubscriptionStore $s): void {
         $plans = new Plans(Plan::class);

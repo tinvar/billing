@@ -28,6 +28,16 @@ interface SubscriptionStore
      */
     public function keepCustomer(Billable $billable, string $customer): string;
 
+    /**
+     * Records $subscription as $billable's first, unless one is recorded
+     * already, and answers the first: $subscription, or the one recorded
+     * before it. One write that only an empty record takes, so of two
+     * claims at once one wins, and for ever after. The payer's customer is
+     * kept already (keepCustomer()): a subscription is only ever kept for a
+     * payer whose customer this application made.
+     */
+    public function firstSubscription(Billable $billable, string $subscription): string;
+
     /** @return list<Subscription> every subscription $billable has, the latest period first, one with no period last, then by id */
     public function subscriptionsOf(Billable $billable, Plans $plans): array;
 

@@ -147,6 +147,51 @@ it('never lets an answer asked of Stripe earlier replace one asked later', funct
         ->and($app->billing->subscription(acme())?->status)->toBe(SubscriptionStatus::Canceled);
 });
 
+// A trial is the payer's first subscription's. Two Checkouts started at
+// once were each offered one, before either was kept; and a subscription
+// made in Stripe's dashboard was never asked about at all.
+it('ends the trial of every subscription that is not the payer\'s first, whichever the webhook hears of first', function () {
+    $app = new App();
+    $start = fn (): string => $app->orm->actAs('acme', fn (): string => $app->billing->checkout(Plan::Pro, \Tinvar\Billing\Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back'));
+    $start();
+    $one = $app->stripe->lastSession();
+    $start();
+    $two = $app->stripe->lastSession();
+    $first = $app->stripe->completeCheckout($two);
+    $second = $app->stripe->completeCheckout($one);
+
+    $app->deliver($app->stripe->event('customer.subscription.created', $first));
+    $app->deliver($app->stripe->event('customer.subscription.created', $second));
+    // Heard of again, the first keeps its trial.
+    $app->deliver($app->stripe->event('customer.subscription.updated', $app->stripe->subscriptions[$first['id']]));
+
+    $ended = array_values(array_filter($app->stripe->http->sent, static fn ($r): bool => $r->method === 'POST' && str_contains($r->url, '/v1/subscriptions/')));
+    expect($one['_form']['subscription_data']['trial_period_days'] ?? null)->toBe('14')
+        ->and($two['_form']['subscription_data']['trial_period_days'] ?? null)->toBe('14')
+        ->and($app->store->find((string) $first['id'], $app->billing->plans)?->status)->toBe(SubscriptionStatus::Trialing)
+        ->and($app->store->find((string) $second['id'], $app->billing->plans)?->status)->toBe(SubscriptionStatus::Active)
+        ->and($app->stripe->subscriptions[$second['id']]['trial_end'])->toBe(Clock::$now)
+        ->and($ended)->toHaveCount(1)
+        ->and($ended[0]->url)->toEndWith("/v1/subscriptions/{$second['id']}");
+    parse_str($ended[0]->body, $form);
+    expect($form)->toBe(['trial_end' => 'now', 'proration_behavior' => 'none']);
+});
+
+it('ends the trial of a subscription made after the first has ended: one trial a payer, for ever', function () {
+    $app = new App();
+    $id = $app->subscribe('acme', Plan::Team);
+    $app->stripe->change($id, ['status' => 'canceled', 'ended_at' => Clock::$now]);
+    $app->deliver($app->stripe->event('customer.subscription.deleted', $app->stripe->subscriptions[$id]));
+    $customer = (string) $app->store->customerOf(acme());
+
+    $dashboard = $app->stripe->subscribe($customer, 'pro_monthly', trialDays: 30);
+    $app->deliver($app->stripe->event('customer.subscription.created', $dashboard));
+
+    expect($app->billing->subscription(acme())?->id)->toBe($dashboard['id'])
+        ->and($app->billing->subscription(acme())?->status)->toBe(SubscriptionStatus::Active)
+        ->and($app->billing->subscription(acme())?->trialEndsAt?->getTimestamp())->toBe(Clock::$now);
+});
+
 it('takes an event about a customer it did not make, and keeps nothing for anyone', function () {
     $app = new App();
     $stranger = $app->stripe->subscribe('cus_NotOurs000000001', 'team_monthly');

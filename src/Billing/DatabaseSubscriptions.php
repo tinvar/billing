@@ -54,6 +54,8 @@ final readonly class DatabaseSubscriptions implements SubscriptionStore
             $table->enum('billable_kind', BillableKind::class);
             $table->string('billable_id');
             $table->string('stripe_customer')->unique();
+            // The payer's first subscription, the one its trial is: written once.
+            $table->string('first_subscription')->nullable();
             $table->timestamp('created_at');
             $table->primary(['billable_kind', 'billable_id']);
         });
@@ -109,6 +111,25 @@ final readonly class DatabaseSubscriptions implements SubscriptionStore
         );
 
         return $this->customerOf($billable) ?? throw new \LogicException("Stripe customer {$customer} could not be kept for {$billable->key()}: it is already another payer's.");
+    }
+
+    public function firstSubscription(Billable $billable, string $subscription): string
+    {
+        // One statement, which only a row with none recorded takes: of two
+        // webhooks at once, one writes and the other reads what it wrote.
+        $this->connection->execute(
+            "UPDATE {$this->customers} SET first_subscription = ? WHERE billable_kind = ? AND billable_id = ? AND first_subscription IS NULL",
+            [$subscription, $billable->kind->value, $billable->id],
+        );
+        $rows = $this->connection->select(
+            "SELECT first_subscription FROM {$this->customers} WHERE billable_kind = ? AND billable_id = ?",
+            [$billable->kind->value, $billable->id],
+        );
+        $first = $rows[0]['first_subscription'] ?? null;
+
+        return \is_string($first) && $first !== ''
+            ? $first
+            : throw new \LogicException("{$billable->key()} has no Stripe customer kept, so no first subscription to record.");
     }
 
     public function subscriptionsOf(Billable $billable, Plans $plans): array

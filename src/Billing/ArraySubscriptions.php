@@ -13,6 +13,9 @@ final class ArraySubscriptions implements SubscriptionStore
     /** @var array<string, Billable> customer => billable */
     private array $billables = [];
 
+    /** @var array<string, string> billable key => its first subscription */
+    private array $first = [];
+
     /** @var array<string, Subscription> */
     private array $subscriptions = [];
 
@@ -39,6 +42,15 @@ final class ArraySubscriptions implements SubscriptionStore
         $this->billables[$customer] = $billable;
 
         return $this->customers[$billable->key()] = $customer;
+    }
+
+    public function firstSubscription(Billable $billable, string $subscription): string
+    {
+        if (!isset($this->customers[$billable->key()])) {
+            throw new \LogicException("{$billable->key()} has no Stripe customer kept, so no first subscription to record.");
+        }
+
+        return $this->first[$billable->key()] ??= $subscription;
     }
 
     public function subscriptionsOf(Billable $billable, Plans $plans): array
