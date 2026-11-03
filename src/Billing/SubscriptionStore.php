@@ -28,7 +28,7 @@ interface SubscriptionStore
      */
     public function keepCustomer(Billable $billable, string $customer): string;
 
-    /** @return list<Subscription> every subscription $billable has, the latest period first */
+    /** @return list<Subscription> every subscription $billable has, the latest period first, one with no period last, then by id */
     public function subscriptionsOf(Billable $billable, Plans $plans): array;
 
     public function find(string $id, Plans $plans): ?Subscription;

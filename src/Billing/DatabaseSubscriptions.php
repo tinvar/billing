@@ -114,7 +114,7 @@ final readonly class DatabaseSubscriptions implements SubscriptionStore
     public function subscriptionsOf(Billable $billable, Plans $plans): array
     {
         $rows = $this->connection->select(
-            "SELECT * FROM {$this->subscriptions} WHERE billable_kind = ? AND billable_id = ? ORDER BY current_period_end DESC, stripe_subscription",
+            "SELECT * FROM {$this->subscriptions} WHERE billable_kind = ? AND billable_id = ? ORDER BY current_period_end IS NULL, current_period_end DESC, stripe_subscription",
             [$billable->kind->value, $billable->id],
         );
 

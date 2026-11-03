@@ -44,7 +44,11 @@ final class ArraySubscriptions implements SubscriptionStore
     public function subscriptionsOf(Billable $billable, Plans $plans): array
     {
         $found = array_values(array_filter($this->subscriptions, static fn (Subscription $s): bool => $s->billable->is($billable)));
-        usort($found, static fn (Subscription $a, Subscription $b): int => ($b->currentPeriodEnd?->getTimestamp() ?? 0) <=> ($a->currentPeriodEnd?->getTimestamp() ?? 0));
+        // As DatabaseSubscriptions orders them: the latest period first, one with
+        // none last, then by id.
+        usort($found, static fn (Subscription $a, Subscription $b): int => ($a->currentPeriodEnd === null) <=> ($b->currentPeriodEnd === null)
+            ?: $b->currentPeriodEnd <=> $a->currentPeriodEnd
+            ?: $a->id <=> $b->id);
 
         return $found;
     }

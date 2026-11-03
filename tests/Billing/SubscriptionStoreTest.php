@@ -28,7 +28,7 @@ use Tinvar\Tests\Orm\Fixtures\Databases;
 require_once __DIR__ . '/../Fixtures/app.php';
 require_once \Composer\InstalledVersions::getInstallPath('tinvar/database') . '/tests/Orm/Fixtures/databases.php';
 
-function subscription(string $id, Billable $billable, SubscriptionStatus $status = SubscriptionStatus::Active, int $syncedAt = 1_800_000_000, ?Plan $plan = Plan::Pro, int $quantity = 1): Subscription
+function subscription(string $id, Billable $billable, SubscriptionStatus $status = SubscriptionStatus::Active, int $syncedAt = 1_800_000_000, ?Plan $plan = Plan::Pro, int $quantity = 1, ?string $periodEnd = '2027-01-15T10:20:30.123456Z'): Subscription
 {
     $at = static fn (int $seconds): CarbonImmutable => CarbonImmutable::createFromTimestamp($seconds, 'UTC');
 
@@ -43,7 +43,7 @@ function subscription(string $id, Billable $billable, SubscriptionStatus $status
         quantity: $quantity,
         trialEndsAt: null,
         currentPeriodStart: $at(1_800_000_000),
-        currentPeriodEnd: CarbonImmutable::parse('2027-01-15T10:20:30.123456Z'),
+        currentPeriodEnd: $periodEnd === null ? null : CarbonImmutable::parse($periodEnd),
         cancelAtPeriodEnd: true,
         canceledAt: null,
         endedAt: null,
@@ -138,5 +138,23 @@ it('reads back a plan the enum no longer has as no plan, which entitles nothing'
         $kept = $s->find('sub_acme01', new Plans(Plan::class));
         expect($kept?->plan)->toBeNull()
             ->and($kept?->entitles(CarbonImmutable::createFromTimestamp(1_800_000_000, 'UTC'), new \DateInterval('P3D')))->toBeFalse();
+    });
+})->with($stores);
+
+// Billing::subscription() falls back to a payer's first subscription, "its
+// latest". Postgres sorts a NULL first in a descending order, where SQLite,
+// MySQL and the array store sort it last: one with no period yet was the
+// latest on Postgres alone. Each store now lists the latest period first,
+// one with none last, and ties by id.
+it('lists a payer\'s subscriptions the latest period first, one with no period last, the same in every store', function (string $store) {
+    eachStore($store, function (SubscriptionStore $s): void {
+        $acme = new Billable(BillableKind::Tenant, 'acme');
+        $s->keep(subscription('sub_acme03', $acme, periodEnd: null));
+        $s->keep(subscription('sub_acme02', $acme, periodEnd: '2027-01-01T00:00:00Z'));
+        $s->keep(subscription('sub_acme05', $acme));
+        $s->keep(subscription('sub_acme04', $acme));
+
+        expect(array_map(static fn (Subscription $kept): string => $kept->id, $s->subscriptionsOf($acme, new Plans(Plan::class))))
+            ->toBe(['sub_acme04', 'sub_acme05', 'sub_acme02', 'sub_acme03']);
     });
 })->with($stores);
