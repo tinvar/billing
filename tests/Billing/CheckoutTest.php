@@ -76,6 +76,27 @@ it('offers the trial to a payer who never subscribed, and to no one again', func
         ->and($first['_form']['subscription_data']['trial_period_days'] ?? null)->toBe('14');
 });
 
+// A second subscription beside one that bills already charges the payer
+// twice for the one plan; a change of plan or seats is the portal's.
+it('refuses Checkout to a payer whose subscription is active or trialing, and starts it once that has ended', function (string $status) {
+    $app = new App();
+    $id = $app->subscribe('acme', Plan::Pro);
+    $app->stripe->change($id, ['status' => $status]);
+    $app->deliver($app->stripe->event('customer.subscription.updated', $app->stripe->subscriptions[$id]));
+    $sessions = \count($app->stripe->sessions);
+
+    expect(fn () => $app->orm->actAs('acme', fn () => $app->billing->checkout(Plan::Team, Interval::Month, 'https://acme.app.test/ok', 'https://acme.app.test/back')))
+        ->toThrow(fn (HttpException $e) => expect([$e->status, $e->code_])->toBe([409, 'already_subscribed']))
+        ->and($app->stripe->sessions)->toHaveCount($sessions)
+        // Another tenant is not held back by acme's.
+        ->and($app->act('billing.checkout', ['plan' => 'pro'], host: 'globex.app.test')->status)->toBe(303);
+
+    $app->stripe->change($id, ['status' => 'canceled', 'ended_at' => Clock::$now]);
+    $app->deliver($app->stripe->event('customer.subscription.deleted', $app->stripe->subscriptions[$id]));
+
+    expect($app->act('billing.checkout', ['plan' => 'team'])->status)->toBe(303);
+})->with(['active', 'trialing']);
+
 it('makes one Stripe customer per payer, and another for another tenant', function () {
     $app = new App();
     $app->act('billing.checkout');

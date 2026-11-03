@@ -154,8 +154,12 @@ final class Billing
      *
      * @param string $successUrl where Stripe sends them once they have paid: absolute, this application's
      * @param string $cancelUrl where Stripe sends them if they go back
+     * A payer with a subscription active or trialing already is refused
+     * (409 `already_subscribed`): they change its plan or seats in the
+     * Customer Portal.
+     *
      * @param int $seats the subscription's quantity
-     * @throws HttpException 401 or 403 with no payer in force
+     * @throws HttpException 401 or 403 with no payer in force; 409 with a subscription active or trialing
      * @throws StripeException
      */
     public function checkout(Plan $plan, Interval $interval, string $successUrl, string $cancelUrl, int $seats = 1): string
@@ -170,6 +174,18 @@ final class Billing
             'plan_not_sold',
         );
         self::assertSeats($seats);
+        // A second subscription beside one that bills already charges the
+        // payer twice; a change of plan or seats is the portal's.
+        $subscriptions = $this->store->subscriptionsOf($billable, $this->plans);
+        foreach ($subscriptions as $subscription) {
+            if (\in_array($subscription->status, [SubscriptionStatus::Active, SubscriptionStatus::Trialing], true)) {
+                throw new HttpException(
+                    409,
+                    'There is a subscription already: change its plan or seats in the billing portal, rather than subscribing again.',
+                    'already_subscribed',
+                );
+            }
+        }
 
         $session = $this->stripe->post('/v1/checkout/sessions', [
             'mode' => 'subscription',
@@ -183,7 +199,7 @@ final class Billing
                 // A trial is the payer's first subscription's alone: offered
                 // again, a payer could cancel each before it ended and
                 // subscribe anew, on the plan for ever and never charged.
-                'trial_period_days' => $plan->trialDays() > 0 && $this->store->subscriptionsOf($billable, $this->plans) === [] ? $plan->trialDays() : null,
+                'trial_period_days' => $plan->trialDays() > 0 && $subscriptions === [] ? $plan->trialDays() : null,
             ],
         ], 'tinvar-checkout-' . bin2hex(random_bytes(16)));
 
