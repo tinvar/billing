@@ -50,7 +50,7 @@ final class Billing
      * @param Plan|null $freePlan the plan of a payer with no subscription that entitles; none unless given
      * @param (\Closure(): CarbonImmutable)|null $clock now, in UTC
      * @param Domains|list<string>|null $hosts the application's own hosts, the only ones Stripe may send a
-     *        browser back to: its Domains -- any host it serves, in its scheme and port, an alias never --
+     *        browser back to: its Domains -- held to Domains::owns(), the rule an action's redirect is held to --
      *        or the host names themselves. None, and Checkout and the portal are refused
      */
     public function __construct(
@@ -496,14 +496,14 @@ final class Billing
             || preg_match('#^(https?)://([^/?\#@:]+)(?::([0-9]{1,5}))?(?:[/?\#].*)?\z#is', $url, $m) !== 1) {
             throw new \InvalidArgumentException("The {$what} URL '{$url}' is not an absolute http or https URL: build it from your own origin, as Urls does.");
         }
-        $scheme = strtolower($m[1]);
+        // Given Domains, the one rule an action's redirect is held to: its
+        // fixed hosts, in its scheme and port, and a host a parameter takes
+        // or a custom domain only where Domains names it redirectable, over
+        // https alone.
         $host = HostName::normalize($m[2]);
-        $port = ($m[3] ?? '') === '' ? null : (int) $m[3];
-
-        $own = $host !== null && ($this->hosts instanceof Domains
-            ? !\in_array($host, $this->hosts->aliases, true)
-                && $this->hosts->originOfHost($host) === $scheme . '://' . $host . ($port === null || $port === ($scheme === 'https' ? 443 : 80) ? '' : ":{$port}")
-            : \in_array($host, $this->hosts, true));
+        $own = $this->hosts instanceof Domains
+            ? $this->hosts->owns($url)
+            : $host !== null && \in_array($host, $this->hosts, true);
         if (!$own) {
             throw new \InvalidArgumentException("The {$what} URL '{$url}' names a host that is not one of this application's hosts, so Stripe is not sent a browser to come back to it: build it from your own origin, as Urls does.");
         }

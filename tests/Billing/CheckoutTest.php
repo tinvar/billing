@@ -216,13 +216,13 @@ it('refuses a Checkout or portal return URL on a host that is not the applicatio
     'an address' => ['https://127.0.0.1/ok'],
 ]);
 
-it('takes a return URL on any of the hosts it was given, and on a host Domains serves', function () {
+it('takes a return URL on any of the hosts it was given, and on a host Domains owns', function () {
     $app = new App();
 
     expect($app->orm->actAs('globex', fn (): string => $app->billing->checkout(Plan::Pro, Interval::Month, 'https://GLOBEX.app.test./ok', 'https://acme.app.test/back')))
         ->toStartWith('https://checkout.stripe.com/');
 
-    $domains = new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}']);
+    $domains = new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}'], redirectable: ['{tenant}.{root}']);
     $billing = new Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), new ArraySubscriptions(), $app->stripe->client(), hosts: $domains);
 
     expect($app->orm->actAs('acme', fn (): string => $billing->checkout(Plan::Pro, Interval::Month, 'https://acme.app.example/ok', 'https://app.example/back')))
@@ -232,6 +232,31 @@ it('takes a return URL on any of the hosts it was given, and on a host Domains s
         // Its scheme and port, as Domains writes its own URLs.
         ->and(fn () => $app->orm->actAs('acme', fn () => $billing->checkout(Plan::Pro, Interval::Month, 'http://app.example/ok', 'https://app.example/back')))
         ->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts');
+});
+
+// A host a parameter takes, or a tenant's custom domain, may be anyone's who
+// can sign up: given a Domains, billing holds a return URL to the rule an
+// action's redirect is held to (Domains::owns()), one rule for both.
+it('holds a return URL on Domains to the rule an action\'s redirect is held to', function () {
+    $app = new App();
+    $billing = static fn (\Tinvar\Routing\Domains $domains): Billing => new Billing(Plan::class, new \Tinvar\Billing\TenantBillables($app->orm), new ArraySubscriptions(), $app->stripe->client(), hosts: $domains);
+    $checkout = static fn (Billing $billing, string $url): \Closure => static fn () => $app->orm->actAs('acme', fn (): string => $billing->checkout(Plan::Pro, Interval::Month, $url, 'https://app.example/back'));
+    $closed = $billing(new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}', 'admin.{root}']));
+    $opened = $billing(new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}', 'admin.{root}'], redirectable: ['{tenant}.{root}']));
+    $domains = new \Tinvar\Routing\Domains(['root' => 'app.example'], patterns: ['{tenant}.{root}', 'admin.{root}']);
+
+    foreach (['https://acme.app.example/ok', 'https://admin.app.example/ok', 'https://app.example/ok', 'http://app.example/ok', 'https://evil.test/ok'] as $url) {
+        $owned = $domains->owns($url);
+        $taken = true;
+        try {
+            $checkout($closed, $url)();
+        } catch (\InvalidArgumentException) {
+            $taken = false;
+        }
+        expect($taken)->toBe($owned, $url);
+    }
+    expect($checkout($closed, 'https://acme.app.example/ok'))->toThrow(\InvalidArgumentException::class, 'not one of this application\'s hosts')
+        ->and($checkout($opened, 'https://acme.app.example/ok')())->toStartWith('https://checkout.stripe.com/');
 });
 
 it('fails closed when Billing was given no hosts of its own: Checkout and the portal are refused, Stripe never asked', function () {
