@@ -101,6 +101,18 @@ it('refuses a replay of a delivery: the event id is the nonce, claimed once in t
         ->and($app->deliver($event, timestamp: Clock::$now + 60)->status)->toBe(409);
 });
 
+// The event id is the nonce, and a nonce store keeps 128 bytes: a longer
+// id is no Stripe event's, refused as such, never a verified delivery the
+// store then cannot claim.
+it('refuses an event id longer than a nonce store keeps as no Stripe event, and takes one as long', function () {
+    $app = new App();
+    $id = $app->subscribe('acme', Plan::Team);
+    $event = $app->stripe->event('customer.subscription.updated', $app->stripe->subscriptions[$id]);
+
+    expect($app->deliver(['id' => 'evt_' . str_repeat('a', 125)] + $event)->status)->toBe(400)
+        ->and($app->deliver(['id' => 'evt_' . str_repeat('b', 124)] + $event)->status)->toBe(204);
+});
+
 it('stores what Stripe answers, not what the event says: a forged-looking body changes nothing', function () {
     $app = new App();
     $id = $app->subscribe('acme', Plan::Pro);

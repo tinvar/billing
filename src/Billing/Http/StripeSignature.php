@@ -22,7 +22,8 @@ use Tinvar\Webhooks\WebhookVerifier;
  *   2. `Stripe-Signature` carries a timestamp and a v1 MAC of
  *      `{t}.{body}` that verifies with it: else 401.
  *   3. The timestamp is within five minutes of now either way: else 401.
- *   4. The body is a Stripe event, its `id` an `evt_` id: else 400. The id
+ *   4. The body is a Stripe event, its `id` an `evt_` id of at most the 128
+ *      bytes a nonce store keeps: else 400. The id
  *      is the nonce, covered by the MAC, so a replay of the delivery -- or
  *      Stripe sending one event twice at once -- is claimed once in the
  *      application's NonceStore, and the second is a 409.
@@ -56,7 +57,7 @@ final readonly class StripeSignature implements WebhookVerifier
             $event = null;
         }
         $id = \is_array($event) ? ($event['id'] ?? null) : null;
-        if (!\is_string($id) || preg_match('/^evt_[A-Za-z0-9]{8,250}\z/', $id) !== 1 || ($event['object'] ?? null) !== 'event') {
+        if (!\is_string($id) || preg_match('/^evt_[A-Za-z0-9]{8,124}\z/', $id) !== 1 || ($event['object'] ?? null) !== 'event') {
             throw new HttpException(400, 'The delivery is signed, and is not a Stripe event with an evt_ id.', 'bad_request');
         }
 
