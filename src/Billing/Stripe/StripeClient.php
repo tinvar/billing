@@ -12,6 +12,7 @@ use Tinvar\Outbound\OutboundHttp;
 use Tinvar\Outbound\OutboundRefused;
 use Tinvar\Outbound\OutboundRequest;
 use Tinvar\Outbound\OutboundResponse;
+use Tinvar\Observability\SafeReason;
 
 /**
  * The calls billing makes to Stripe's API, through the application's one
@@ -46,8 +47,6 @@ final readonly class StripeClient
 
     private Destinations $destinations;
 
-    private Redactor $redactor;
-
     public function __construct(
         /** The secret key; null in development before one is set, where every call says to set it. */
         #[\SensitiveParameter]
@@ -64,7 +63,6 @@ final readonly class StripeClient
             throw new \InvalidArgumentException('A Stripe webhook signing secret is the whsec_... the dashboard shows for the endpoint, or `stripe listen` prints.');
         }
         $this->destinations = Destinations::hosts([self::HOST]);
-        $this->redactor = new Redactor(traces: false);
     }
 
     /** Whether the key is a live-mode one, which charges real cards. */
@@ -240,17 +238,10 @@ final readonly class StripeClient
     /** $text on one line, cut to 300 bytes, with the keys and anything else that looks like a secret taken out. */
     private function clean(string $text): string
     {
-        foreach ([$this->secretKey, $this->webhookSecret] as $secret) {
-            if ($secret !== null) {
-                $text = str_replace($secret->reveal(), Redactor::REDACTED, $text);
-            }
-        }
-        $text = (string) preg_replace('/\b(sk|rk)_(test|live)_[A-Za-z0-9]+/', Redactor::REDACTED, $text);
-        $text = trim((string) preg_replace('/[\x00-\x1f\x7f]+/', ' ', $text));
-        if (\strlen($text) > 300) {
-            $text = mb_strcut($text, 0, 300, 'UTF-8') . '...';
-        }
-
-        return $this->redactor->text($text);
+        return SafeReason::of(
+            $text,
+            array_values(array_filter([$this->secretKey?->reveal(), $this->webhookSecret?->reveal()], static fn (?string $s): bool => $s !== null)),
+            static fn (string $t): string => (string) preg_replace('/\b(sk|rk)_(test|live)_[A-Za-z0-9]+/', Redactor::REDACTED, $t),
+        );
     }
 }
