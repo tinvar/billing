@@ -67,17 +67,20 @@ function eachStore(string $store, \Closure $test): void
 
         return;
     }
-    Databases::inScratchSchema('pgsql', static function (\PDO $pdo) use ($test): void {
-        $connection = new PdoConnection($pdo, 'billing-store-pg');
+    Databases::inScratchSchema($store, static function (\PDO $pdo) use ($test, $store): void {
+        $connection = new PdoConnection($pdo, "billing-store-{$store}");
         DatabaseSubscriptions::define(new Schema($connection, \Tinvar\Orm\Schema\Dialect::for($connection)));
         $test(new DatabaseSubscriptions($connection));
     });
 }
 
-$stores = ['in memory' => 'array', 'SQLite' => 'sqlite', 'Postgres' => 'pgsql'];
+$stores = ['in memory' => 'array', 'SQLite' => 'sqlite', 'Postgres' => 'pgsql', 'MySQL' => 'mysql'];
 
 beforeEach(function () {
     if (str_contains((string) $this->dataName(), 'Postgres') && ($missing = Databases::postgresMissing()) !== null) {
+        $this->markTestSkipped($missing);
+    }
+    if (str_contains((string) $this->dataName(), 'MySQL') && ($missing = Databases::mysqlMissing()) !== null) {
         $this->markTestSkipped($missing);
     }
 });
@@ -144,6 +147,21 @@ it('never lets an older answer replace a newer one, and lets a newer one replace
             ->and($s->find('sub_acme01', $plans)?->status)->toBe(SubscriptionStatus::Active)
             ->and($s->keep(subscription('sub_acme01', $acme, SubscriptionStatus::Canceled, 1_800_000_200)))->toBeTrue()
             ->and($s->find('sub_acme01', $plans)?->status)->toBe(SubscriptionStatus::Canceled);
+    });
+})->with($stores);
+
+// ADR 0172: MySQL counts the rows an UPDATE changed, not the rows it
+// matched. The same answer kept twice -- a webhook and a refresh in one
+// second, a webhook sent again -- changed nothing the second time, and
+// read there as an older answer refused.
+it('keeps the same answer twice, as a webhook sent again does', function (string $store) {
+    eachStore($store, function (SubscriptionStore $s): void {
+        $acme = new Billable(BillableKind::Tenant, 'acme');
+        expect($s->keep(subscription('sub_acme01', $acme)))->toBeTrue()
+            ->and($s->keep(subscription('sub_acme01', $acme)))->toBeTrue()
+            ->and($s->keep(subscription('sub_acme01', $acme, quantity: 2)))->toBeTrue()
+            ->and($s->keep(subscription('sub_acme01', $acme, quantity: 2)))->toBeTrue()
+            ->and($s->keep(subscription('sub_acme01', $acme, quantity: 3, syncedAt: 1_799_999_999)))->toBeFalse('older');
     });
 })->with($stores);
 

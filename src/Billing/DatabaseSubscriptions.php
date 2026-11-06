@@ -6,6 +6,7 @@ namespace Tinvar\Billing;
 
 use Carbon\CarbonImmutable;
 use Tinvar\Orm\Connection;
+use Tinvar\Orm\NamesDriver;
 use Tinvar\Orm\Schema\Dialect;
 use Tinvar\Orm\Schema\Schema;
 use Tinvar\Orm\Schema\Table;
@@ -166,10 +167,17 @@ final readonly class DatabaseSubscriptions implements SubscriptionStore
             // no earlier than the one kept.
             $set = implode(', ', array_map(static fn (string $column): string => "{$column} = ?", array_keys(array_slice($values, 1, null, true))));
 
+            // MySQL counts the rows an UPDATE changed, not the rows it
+            // matched, and the same answer kept twice -- a webhook sent
+            // again -- changes nothing: there the row is asked after,
+            // under the lock the UPDATE took in this transaction (ADR 0172).
             return $this->connection->execute(
                 "UPDATE {$this->subscriptions} SET {$set} WHERE stripe_subscription = ? AND synced_at <= ?",
                 [...array_values(array_slice($values, 1)), $subscription->id, $values['synced_at']],
-            ) === 1;
+            ) === 1 || ($this->connection instanceof NamesDriver && $this->connection->driver() === 'mysql' && $this->connection->select(
+                "SELECT 1 FROM {$this->subscriptions} WHERE stripe_subscription = ? AND synced_at <= ? FOR SHARE",
+                [$subscription->id, $values['synced_at']],
+            ) !== []);
         });
     }
 
